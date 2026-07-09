@@ -1022,14 +1022,18 @@ function App() {
     );
 
     if (confirmed) {
-      setTrackerState((currentState) => ({
-        completedDays: emptyProgress(),
-        bestStreak: currentState.bestStreak,
-        lockedDays: emptyProgress(),
-        schemaVersion: 2,
-        startDate: todayDate,
-        updatedAt: Date.now(),
-      }));
+      setTrackerState((currentState) => {
+        const { longestStreak } = calculateStreaks(currentState.completedDays);
+
+        return {
+          completedDays: emptyProgress(),
+          bestStreak: Math.max(currentState.bestStreak, longestStreak),
+          lockedDays: emptyProgress(),
+          schemaVersion: 2,
+          startDate: todayDate,
+          updatedAt: Date.now(),
+        };
+      });
       setAnimatedDay(null);
     }
   };
