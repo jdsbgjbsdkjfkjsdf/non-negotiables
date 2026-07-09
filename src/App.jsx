@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, RotateCcw, Share2, Sparkles, Trophy } from 'lucide-react';
+import {
+  Check,
+  LockKeyhole,
+  RotateCcw,
+  Share2,
+  Sparkles,
+  Trophy,
+} from 'lucide-react';
 
 const TOTAL_DAYS = 30;
 const STORAGE_KEY = 'non-negotiables-progress-v1';
@@ -63,6 +70,7 @@ const getSharedTrackerState = () => {
   return {
     completedDays: progress,
     bestStreak: Math.max(longestStreak, sharedBestStreak),
+    lockedDays: emptyProgress(),
   };
 };
 
@@ -76,6 +84,17 @@ const normalizeSavedTrackerState = (savedState) => {
   }
 
   const completedDays = savedDays.map(Boolean);
+  const savedLockedDays = Array.isArray(savedState?.lockedDays)
+    ? savedState.lockedDays
+    : emptyProgress();
+  const lockedDays = savedLockedDays
+    .slice(0, TOTAL_DAYS)
+    .map((isLocked, index) => Boolean(isLocked) && completedDays[index]);
+
+  while (lockedDays.length < TOTAL_DAYS) {
+    lockedDays.push(false);
+  }
+
   const { longestStreak } = calculateStreaks(completedDays);
   const savedBestStreak = Array.isArray(savedState)
     ? 0
@@ -84,6 +103,7 @@ const normalizeSavedTrackerState = (savedState) => {
   return {
     completedDays,
     bestStreak: Math.max(longestStreak, savedBestStreak),
+    lockedDays,
   };
 };
 
@@ -109,6 +129,7 @@ const loadTrackerState = () => {
   return {
     completedDays: emptyProgress(),
     bestStreak: 0,
+    lockedDays: emptyProgress(),
   };
 };
 
@@ -245,8 +266,8 @@ const createAccountabilityTile = async ({ dayNumber, stats }) => {
   ];
 
   metricItems.forEach(([label, value], index) => {
-    const x = 124 + index * 277;
-    roundedRect(context, x, 650, 238, 166, 24);
+    const x = 124 + index * 286;
+    roundedRect(context, x, 650, 260, 166, 24);
     context.fillStyle = '#fbfcfe';
     context.fill();
     context.strokeStyle = '#e5eaf1';
@@ -254,12 +275,12 @@ const createAccountabilityTile = async ({ dayNumber, stats }) => {
     context.stroke();
 
     context.fillStyle = '#8a94a5';
-    context.font = `800 24px ${CANVAS_FONT_STACK}`;
-    context.fillText(label, x + 28, 705);
+    context.font = `800 20px ${CANVAS_FONT_STACK}`;
+    context.fillText(label, x + 24, 705);
 
     context.fillStyle = '#0b1220';
     context.font = `850 58px ${CANVAS_FONT_STACK}`;
-    context.fillText(value, x + 28, 773);
+    context.fillText(value, x + 24, 773);
   });
 
   context.fillStyle = '#5d6675';
@@ -309,7 +330,7 @@ function App() {
   const [animatedDay, setAnimatedDay] = useState(null);
   const [shareState, setShareState] = useState('Copy status link');
   const [tileShareState, setTileShareState] = useState('Share image');
-  const { completedDays, bestStreak } = trackerState;
+  const { completedDays, bestStreak, lockedDays } = trackerState;
 
   const stats = useMemo(() => {
     const points = completedDays.filter(Boolean).length;
@@ -351,6 +372,10 @@ function App() {
   );
 
   const toggleDay = (index) => {
+    if (lockedDays[index]) {
+      return;
+    }
+
     const isCompleting = !completedDays[index];
 
     setTrackerState((currentState) => {
@@ -358,11 +383,15 @@ function App() {
         (isComplete, currentIndex) =>
           currentIndex === index ? !isComplete : isComplete,
       );
+      const nextLockedDays = currentState.lockedDays.map((isLocked, currentIndex) =>
+        currentIndex === index && !nextCompletedDays[currentIndex] ? false : isLocked,
+      );
       const { longestStreak } = calculateStreaks(nextCompletedDays);
 
       return {
         completedDays: nextCompletedDays,
         bestStreak: Math.max(currentState.bestStreak, longestStreak),
+        lockedDays: nextLockedDays,
       };
     });
 
@@ -388,9 +417,19 @@ function App() {
       setTrackerState((currentState) => ({
         completedDays: emptyProgress(),
         bestStreak: currentState.bestStreak,
+        lockedDays: emptyProgress(),
       }));
       setAnimatedDay(null);
     }
+  };
+
+  const lockCompletedDay = (dayNumber) => {
+    setTrackerState((currentState) => ({
+      ...currentState,
+      lockedDays: currentState.lockedDays.map((isLocked, index) =>
+        index === dayNumber - 1 && currentState.completedDays[index] ? true : isLocked,
+      ),
+    }));
   };
 
   const shareProgress = async () => {
@@ -442,6 +481,7 @@ function App() {
             text: tileText,
           });
           setTileShareState('Shared');
+          lockCompletedDay(latestCompletedDay);
           window.setTimeout(() => setTileShareState('Share image'), 2200);
           return;
         } catch (error) {
@@ -455,6 +495,7 @@ function App() {
 
       downloadBlob(tileBlob, fileName);
       setTileShareState('Image downloaded');
+      lockCompletedDay(latestCompletedDay);
     } catch (error) {
       setTileShareState(error.name === 'AbortError' ? 'Share canceled' : 'Try again');
     }
@@ -605,10 +646,13 @@ function App() {
           {completedDays.map((isComplete, index) => {
             const dayNumber = index + 1;
             const isAnimating = animatedDay === index && isComplete;
+            const isLocked = lockedDays[index];
 
             return (
               <button
                 className={`day-card ${isComplete ? 'is-complete' : ''} ${
+                  isLocked ? 'is-locked' : ''
+                } ${
                   isAnimating ? 'just-completed' : ''
                 }`}
                 type="button"
@@ -616,14 +660,21 @@ function App() {
                 onClick={() => toggleDay(index)}
                 aria-pressed={isComplete}
                 aria-label={`Day ${dayNumber}, ${
-                  isComplete ? 'complete' : 'incomplete'
+                  isLocked ? 'locked complete' : isComplete ? 'complete' : 'incomplete'
                 }`}
+                disabled={isLocked}
               >
                 <span className="day-label">Day</span>
-                <strong>{String(dayNumber).padStart(2, '0')}</strong>
+                <strong>{formatDayNumber(dayNumber)}</strong>
                 <span className="check-ring" aria-hidden="true">
                   <Check size={22} strokeWidth={3.1} />
                 </span>
+                {isLocked && (
+                  <span className="lock-badge" aria-hidden="true">
+                    <LockKeyhole size={12} strokeWidth={2.8} />
+                    Locked
+                  </span>
+                )}
               </button>
             );
           })}

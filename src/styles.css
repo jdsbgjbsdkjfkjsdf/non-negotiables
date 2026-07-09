@@ -275,10 +275,11 @@ h2 {
   display: block;
   min-height: 34px;
   color: var(--soft);
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 760;
   line-height: 1.35;
   text-transform: uppercase;
+  overflow-wrap: anywhere;
 }
 
 .stat-card strong {
@@ -598,6 +599,14 @@ h2 {
   box-shadow: var(--shadow-soft);
 }
 
+.day-card:disabled {
+  cursor: default;
+}
+
+.day-card:disabled:hover {
+  transform: none;
+}
+
 .day-card:focus-visible,
 .text-button:focus-visible,
 .reset-button:focus-visible {
@@ -659,6 +668,40 @@ h2 {
   border-color: var(--accent);
   background: var(--accent);
   color: white;
+}
+
+.day-card.is-locked {
+  border-color: rgba(11, 18, 32, 0.2);
+  background:
+    linear-gradient(180deg, rgba(247, 255, 253, 0.94), rgba(255, 255, 255, 0.96)),
+    var(--surface);
+}
+
+.day-card.is-locked::after {
+  border-color: rgba(11, 18, 32, 0.12);
+}
+
+.day-card.is-locked .check-ring {
+  border-color: var(--ink);
+  background: var(--ink);
+}
+
+.lock-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 20px);
+  border: 1px solid rgba(11, 18, 32, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+  padding: 4px 7px;
+  font-size: 0.63rem;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .day-card.just-completed .check-ring {
@@ -772,6 +815,10 @@ h2 {
 
   .day-card strong {
     font-size: 1.48rem;
+  }
+
+  .stat-card span {
+    font-size: 0.76rem;
   }
 }
 
