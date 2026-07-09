@@ -202,19 +202,19 @@ function App() {
   };
 
   const resetProgress = () => {
-    if (stats.points === 0 && stats.bestStreak === 0) {
+    if (stats.points === 0) {
       return;
     }
 
     const confirmed = window.confirm(
-      'Reset all 30 days and the saved best streak? This clears the progress saved in this browser.',
+      'Reset the daily check marks? Your best streak will stay saved.',
     );
 
     if (confirmed) {
-      setTrackerState({
+      setTrackerState((currentState) => ({
         completedDays: emptyProgress(),
-        bestStreak: 0,
-      });
+        bestStreak: currentState.bestStreak,
+      }));
       setAnimatedDay(null);
     }
   };
