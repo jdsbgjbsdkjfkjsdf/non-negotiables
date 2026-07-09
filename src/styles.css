@@ -160,6 +160,41 @@ h2 {
   font-weight: 650;
 }
 
+.sync-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 14px;
+  border: 1px solid rgba(26, 168, 153, 0.18);
+  border-radius: 999px;
+  background: rgba(227, 246, 243, 0.78);
+  color: var(--accent-strong);
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.sync-pill::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 4px rgba(26, 168, 153, 0.12);
+}
+
+.sync-pill.is-offline {
+  border-color: rgba(138, 148, 165, 0.28);
+  background: #f1f4f8;
+  color: var(--muted);
+}
+
+.sync-pill.is-offline::before {
+  box-shadow: 0 0 0 4px rgba(138, 148, 165, 0.12);
+}
+
 .text-button,
 .reset-button {
   display: inline-flex;

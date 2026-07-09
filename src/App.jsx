@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
   LockKeyhole,
@@ -10,11 +10,21 @@ import {
 
 const TOTAL_DAYS = 30;
 const STORAGE_KEY = 'non-negotiables-progress-v1';
+const SYNC_API_URL = 'https://api.keyval.org';
+const SYNC_KEY = 'non-negotiables-bryan-2026-ab42f078453943db9f24';
+const SYNC_INTERVAL_MS = 8000;
 const TILE_SIZE = 1080;
 const CANVAS_FONT_STACK =
   'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 
 const emptyProgress = () => Array.from({ length: TOTAL_DAYS }, () => false);
+
+const countPoints = (days) => days.filter(Boolean).length;
+
+const hasMeaningfulProgress = (state) =>
+  countPoints(state.completedDays) > 0 ||
+  state.bestStreak > 0 ||
+  state.lockedDays.some(Boolean);
 
 const clampStreak = (value) => {
   const streak = Number(value);
@@ -25,6 +35,21 @@ const clampStreak = (value) => {
 
   return Math.min(Math.max(streak, 0), TOTAL_DAYS);
 };
+
+const sanitizeTimestamp = (value) => {
+  const timestamp = Number(value);
+
+  if (!Number.isFinite(timestamp) || timestamp < 0) {
+    return 0;
+  }
+
+  return Math.floor(timestamp);
+};
+
+const markStateUpdated = (state) => ({
+  ...state,
+  updatedAt: Date.now(),
+});
 
 const calculateStreaks = (days) => {
   let longestStreak = 0;
@@ -71,6 +96,7 @@ const getSharedTrackerState = () => {
     completedDays: progress,
     bestStreak: Math.max(longestStreak, sharedBestStreak),
     lockedDays: emptyProgress(),
+    updatedAt: 0,
   };
 };
 
@@ -104,6 +130,7 @@ const normalizeSavedTrackerState = (savedState) => {
     completedDays,
     bestStreak: Math.max(longestStreak, savedBestStreak),
     lockedDays,
+    updatedAt: sanitizeTimestamp(savedState?.updatedAt),
   };
 };
 
@@ -130,7 +157,89 @@ const loadTrackerState = () => {
     completedDays: emptyProgress(),
     bestStreak: 0,
     lockedDays: emptyProgress(),
+    updatedAt: 0,
   };
+};
+
+const progressToBits = (days) => days.map((isComplete) => (isComplete ? '1' : '0')).join('');
+
+const bitsToProgress = (bits) => {
+  if (typeof bits !== 'string' || bits.length !== TOTAL_DAYS || /[^01]/.test(bits)) {
+    return null;
+  }
+
+  return bits.split('').map((bit) => bit === '1');
+};
+
+const encodeSyncState = (state) =>
+  `v1-c${progressToBits(state.completedDays)}-l${progressToBits(
+    state.lockedDays,
+  )}-b${clampStreak(state.bestStreak)}-u${sanitizeTimestamp(state.updatedAt)}`;
+
+const decodeSyncState = (value) => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const match = value.match(/^v1-c([01]{30})-l([01]{30})-b(\d{1,2})-u(\d{1,16})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const completedDays = bitsToProgress(match[1]);
+  const lockedBits = bitsToProgress(match[2]);
+
+  if (!completedDays || !lockedBits) {
+    return null;
+  }
+
+  const lockedDays = lockedBits.map((isLocked, index) => isLocked && completedDays[index]);
+  const { longestStreak } = calculateStreaks(completedDays);
+
+  return {
+    completedDays,
+    bestStreak: Math.max(longestStreak, clampStreak(match[3])),
+    lockedDays,
+    updatedAt: sanitizeTimestamp(match[4]),
+  };
+};
+
+const fetchSharedTrackerState = async () => {
+  const response = await fetch(`${SYNC_API_URL}/get/${SYNC_KEY}`, {
+    cache: 'no-store',
+  });
+
+  if (!response.ok) {
+    throw new Error('Unable to load shared progress');
+  }
+
+  const payload = await response.json();
+
+  if (payload.status !== 'SUCCESS' || !payload.val) {
+    return null;
+  }
+
+  return decodeSyncState(payload.val);
+};
+
+const saveSharedTrackerState = async (state) => {
+  const encodedState = encodeSyncState(state);
+  const response = await fetch(`${SYNC_API_URL}/set/${SYNC_KEY}/${encodedState}`, {
+    cache: 'no-store',
+  });
+
+  if (!response.ok) {
+    throw new Error('Unable to save shared progress');
+  }
+
+  const payload = await response.json();
+
+  if (payload.status !== 'SUCCESS') {
+    throw new Error('Unable to save shared progress');
+  }
+
+  return encodedState;
 };
 
 const pluralizeDay = (count) => `${count} ${count === 1 ? 'day' : 'days'}`;
@@ -330,7 +439,16 @@ function App() {
   const [animatedDay, setAnimatedDay] = useState(null);
   const [shareState, setShareState] = useState('Copy status link');
   const [tileShareState, setTileShareState] = useState('Share image');
+  const [syncState, setSyncState] = useState('Syncing');
+  const [syncReady, setSyncReady] = useState(false);
+  const trackerStateRef = useRef(trackerState);
+  const lastSyncedValueRef = useRef(null);
+  const isSavingRef = useRef(false);
   const { completedDays, bestStreak, lockedDays } = trackerState;
+
+  useEffect(() => {
+    trackerStateRef.current = trackerState;
+  }, [trackerState]);
 
   const stats = useMemo(() => {
     const points = completedDays.filter(Boolean).length;
@@ -347,20 +465,159 @@ function App() {
   }, [bestStreak, completedDays]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(trackerState));
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(trackerState));
+    } catch {
+      // Local storage can be unavailable in stricter browser modes.
+    }
   }, [trackerState]);
+
+  const applyRemoteState = useCallback((remoteState) => {
+    const encodedRemoteState = encodeSyncState(remoteState);
+    lastSyncedValueRef.current = encodedRemoteState;
+    setTrackerState(remoteState);
+    setSyncState('Synced');
+  }, []);
+
+  const saveStateLive = useCallback(async (state, nextStatus = 'Synced') => {
+    const stateToSave = state.updatedAt ? state : markStateUpdated(state);
+
+    isSavingRef.current = true;
+    setSyncState('Saving');
+
+    try {
+      const encodedState = await saveSharedTrackerState(stateToSave);
+      lastSyncedValueRef.current = encodedState;
+      setSyncState(nextStatus);
+    } finally {
+      isSavingRef.current = false;
+    }
+
+    return stateToSave;
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const initializeLiveSync = async () => {
+      setSyncState('Syncing');
+
+      try {
+        const remoteState = await fetchSharedTrackerState();
+
+        if (isCancelled) {
+          return;
+        }
+
+        const localState = trackerStateRef.current;
+        const localIsLegacy = localState.updatedAt === 0;
+        const shouldPromoteLegacyLocal =
+          localIsLegacy &&
+          hasMeaningfulProgress(localState) &&
+          (!remoteState || !hasMeaningfulProgress(remoteState));
+
+        if (!remoteState || shouldPromoteLegacyLocal) {
+          const promotedState = markStateUpdated(localState);
+          setTrackerState(promotedState);
+          await saveStateLive(promotedState);
+        } else if (remoteState.updatedAt >= localState.updatedAt) {
+          applyRemoteState(remoteState);
+        } else {
+          await saveStateLive(localState);
+        }
+
+        if (!isCancelled) {
+          setSyncReady(true);
+        }
+      } catch {
+        if (!isCancelled) {
+          setSyncReady(true);
+          setSyncState('Offline');
+        }
+      }
+    };
+
+    initializeLiveSync();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [applyRemoteState, saveStateLive]);
+
+  useEffect(() => {
+    if (!syncReady) {
+      return undefined;
+    }
+
+    const encodedState = encodeSyncState(trackerState);
+
+    if (encodedState === lastSyncedValueRef.current) {
+      return undefined;
+    }
+
+    const saveTimer = window.setTimeout(async () => {
+      try {
+        await saveStateLive(trackerState);
+      } catch {
+        setSyncState('Offline');
+      }
+    }, 350);
+
+    return () => window.clearTimeout(saveTimer);
+  }, [saveStateLive, syncReady, trackerState]);
+
+  const refreshFromLiveState = useCallback(async () => {
+    if (isSavingRef.current || document.visibilityState === 'hidden') {
+      return;
+    }
+
+    try {
+      const remoteState = await fetchSharedTrackerState();
+
+      if (!remoteState) {
+        return;
+      }
+
+      const localState = trackerStateRef.current;
+
+      if (remoteState.updatedAt > localState.updatedAt) {
+        applyRemoteState(remoteState);
+      } else {
+        setSyncState('Synced');
+      }
+    } catch {
+      setSyncState('Offline');
+    }
+  }, [applyRemoteState]);
+
+  useEffect(() => {
+    if (!syncReady) {
+      return undefined;
+    }
+
+    const syncTimer = window.setInterval(refreshFromLiveState, SYNC_INTERVAL_MS);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshFromLiveState();
+      }
+    };
+
+    window.addEventListener('focus', refreshFromLiveState);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(syncTimer);
+      window.removeEventListener('focus', refreshFromLiveState);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [refreshFromLiveState, syncReady]);
 
   const statusUrl = useMemo(() => {
     const url = new URL(window.location.href);
-    const days = completedDays
-      .map((isComplete, index) => (isComplete ? index + 1 : null))
-      .filter(Boolean)
-      .join(',');
-
-    url.searchParams.set('days', days);
-    url.searchParams.set('best', String(stats.bestStreak));
+    url.searchParams.delete('days');
+    url.searchParams.delete('best');
     return url.toString();
-  }, [completedDays, stats.bestStreak]);
+  }, []);
 
   const latestCompletedDay = useMemo(
     () =>
@@ -392,6 +649,7 @@ function App() {
         completedDays: nextCompletedDays,
         bestStreak: Math.max(currentState.bestStreak, longestStreak),
         lockedDays: nextLockedDays,
+        updatedAt: Date.now(),
       };
     });
 
@@ -418,6 +676,7 @@ function App() {
         completedDays: emptyProgress(),
         bestStreak: currentState.bestStreak,
         lockedDays: emptyProgress(),
+        updatedAt: Date.now(),
       }));
       setAnimatedDay(null);
     }
@@ -429,6 +688,7 @@ function App() {
       lockedDays: currentState.lockedDays.map((isLocked, index) =>
         index === dayNumber - 1 && currentState.completedDays[index] ? true : isLocked,
       ),
+      updatedAt: Date.now(),
     }));
   };
 
@@ -526,6 +786,9 @@ function App() {
             <p className="status-count">{stats.points} out of 30 days complete</p>
             <p className="status-streak">
               Current streak: {pluralizeDay(stats.currentStreak)}
+            </p>
+            <p className={`sync-pill ${syncState === 'Offline' ? 'is-offline' : ''}`}>
+              {syncState}
             </p>
           </div>
           <button className="text-button" type="button" onClick={shareProgress}>
