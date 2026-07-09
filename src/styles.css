@@ -86,6 +86,7 @@ button {
 
 h1,
 h2,
+h3,
 p {
   margin: 0;
 }
@@ -289,6 +290,55 @@ h2 {
   border-radius: inherit;
   background: linear-gradient(90deg, var(--ink), var(--accent));
   transition: width 520ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.daily-checkin {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+  border: 1px solid rgba(26, 168, 153, 0.24);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(227, 246, 243, 0.82), rgba(255, 255, 255, 0.94)),
+    var(--surface);
+  padding: 16px;
+}
+
+.daily-checkin h3 {
+  margin-top: 8px;
+  color: var(--ink);
+  font-size: 1.2rem;
+  line-height: 1.1;
+}
+
+.daily-checkin p:not(.eyebrow) {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.94rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.daily-checkin.is-logged {
+  border-color: rgba(26, 168, 153, 0.34);
+  background:
+    linear-gradient(135deg, rgba(227, 246, 243, 0.98), rgba(255, 255, 255, 0.96)),
+    var(--surface);
+}
+
+.daily-checkin.is-broken {
+  border-color: rgba(11, 18, 32, 0.18);
+  background:
+    linear-gradient(135deg, rgba(241, 244, 248, 0.98), rgba(255, 255, 255, 0.96)),
+    var(--surface);
+}
+
+.reminder-button {
+  width: auto;
+  flex: 0 0 auto;
+  min-width: 176px;
 }
 
 .stats-grid {
@@ -634,6 +684,11 @@ h2 {
   box-shadow: var(--shadow-soft);
 }
 
+.day-card:not(.is-interactive):hover {
+  border-color: var(--line);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.9) inset;
+}
+
 .day-card:disabled {
   cursor: default;
 }
@@ -705,6 +760,58 @@ h2 {
   color: white;
 }
 
+.day-card.is-due {
+  border-color: rgba(26, 168, 153, 0.58);
+  background:
+    linear-gradient(180deg, rgba(227, 246, 243, 0.76), rgba(255, 255, 255, 0.96)),
+    var(--surface);
+  box-shadow:
+    0 0 0 2px rgba(26, 168, 153, 0.1),
+    0 16px 34px rgba(15, 118, 110, 0.12);
+}
+
+.day-card.is-due::after {
+  border-color: rgba(26, 168, 153, 0.42);
+}
+
+.day-card.is-due .day-label,
+.day-card.is-due strong {
+  color: var(--accent-strong);
+}
+
+.day-card.is-due .check-ring {
+  border-color: var(--accent);
+  background: #ffffff;
+  color: var(--accent);
+}
+
+.day-card.is-waiting {
+  background: #fbfcfe;
+  color: var(--muted);
+}
+
+.day-card.is-waiting .check-ring {
+  background: #f2f5f9;
+  color: transparent;
+}
+
+.day-card.is-missed {
+  border-color: rgba(138, 148, 165, 0.36);
+  background:
+    linear-gradient(180deg, rgba(241, 244, 248, 0.92), rgba(255, 255, 255, 0.96)),
+    var(--surface);
+}
+
+.day-card.is-missed .day-label,
+.day-card.is-missed strong {
+  color: var(--muted);
+}
+
+.day-card.is-missed .check-ring {
+  border-color: rgba(93, 102, 117, 0.34);
+  background: #eef2f6;
+}
+
 .day-card.is-locked {
   border-color: rgba(11, 18, 32, 0.34);
   background:
@@ -722,6 +829,44 @@ h2 {
 .day-card.is-locked .check-ring {
   border-color: var(--ink);
   background: var(--ink);
+}
+
+.state-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  max-width: calc(100% - 42px);
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(138, 148, 165, 0.24);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--soft);
+  padding: 4px 7px;
+  font-size: 0.58rem;
+  font-weight: 850;
+  line-height: 1;
+  text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.day-card.is-complete .state-badge {
+  border-color: rgba(26, 168, 153, 0.22);
+  background: rgba(227, 246, 243, 0.92);
+  color: var(--accent-strong);
+}
+
+.day-card.is-due .state-badge {
+  border-color: rgba(26, 168, 153, 0.28);
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.day-card.is-missed .state-badge {
+  background: #eef2f6;
+  color: var(--muted);
 }
 
 .lock-badge {
@@ -814,7 +959,7 @@ h2 {
   }
 
   .day-grid {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   h1 {
@@ -859,6 +1004,18 @@ h2 {
 
   .stat-card span {
     font-size: 0.76rem;
+  }
+}
+
+@media (max-width: 620px) {
+  .daily-checkin {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .reminder-button {
+    width: 100%;
+    min-width: 0;
   }
 }
 
@@ -911,7 +1068,7 @@ h2 {
   }
 
   .day-grid {
-    grid-template-columns: repeat(10, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
   .day-card strong {

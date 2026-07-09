@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Bell,
   Check,
   LockKeyhole,
   RotateCcw,
@@ -13,11 +14,20 @@ const STORAGE_KEY = 'non-negotiables-progress-v1';
 const SYNC_API_URL = 'https://api.keyval.org';
 const SYNC_KEY = 'non-negotiables-bryan-2026-ab42f078453943db9f24';
 const SYNC_INTERVAL_MS = 8000;
+const EASTERN_TIME_ZONE = 'America/New_York';
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const TILE_SIZE = 1080;
 const CANVAS_FONT_STACK =
   'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 
 const emptyProgress = () => Array.from({ length: TOTAL_DAYS }, () => false);
+
+const easternDateFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: EASTERN_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
 
 const countPoints = (days) => days.filter(Boolean).length;
 
@@ -25,6 +35,129 @@ const hasMeaningfulProgress = (state) =>
   countPoints(state.completedDays) > 0 ||
   state.bestStreak > 0 ||
   state.lockedDays.some(Boolean);
+
+const getEasternDateString = (date = new Date()) => {
+  const dateParts = Object.fromEntries(
+    easternDateFormatter.formatToParts(date).map((part) => [part.type, part.value]),
+  );
+
+  return `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+};
+
+const parseDateString = (value) => {
+  const match = typeof value === 'string' && value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const utcMs = Date.UTC(year, month - 1, day);
+  const parsedDate = new Date(utcMs);
+
+  if (
+    parsedDate.getUTCFullYear() !== year ||
+    parsedDate.getUTCMonth() !== month - 1 ||
+    parsedDate.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  return { day, month, utcMs, year };
+};
+
+const isDateString = (value) => Boolean(parseDateString(value));
+
+const formatDateString = (date) =>
+  [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, '0'),
+    String(date.getUTCDate()).padStart(2, '0'),
+  ].join('-');
+
+const addDays = (dateString, days) => {
+  const parsedDate = parseDateString(dateString);
+
+  if (!parsedDate) {
+    return getEasternDateString();
+  }
+
+  return formatDateString(new Date(parsedDate.utcMs + days * MS_PER_DAY));
+};
+
+const daysBetween = (startDate, endDate) => {
+  const parsedStartDate = parseDateString(startDate);
+  const parsedEndDate = parseDateString(endDate);
+
+  if (!parsedStartDate || !parsedEndDate) {
+    return 0;
+  }
+
+  return Math.floor((parsedEndDate.utcMs - parsedStartDate.utcMs) / MS_PER_DAY);
+};
+
+const compactDate = (dateString) => dateString.replaceAll('-', '');
+
+const expandCompactDate = (dateString) => {
+  if (typeof dateString !== 'string' || !/^\d{8}$/.test(dateString)) {
+    return null;
+  }
+
+  const expandedDate = `${dateString.slice(0, 4)}-${dateString.slice(
+    4,
+    6,
+  )}-${dateString.slice(6, 8)}`;
+
+  return isDateString(expandedDate) ? expandedDate : null;
+};
+
+const inferStartDateFromProgress = (completedDays, todayDate = getEasternDateString()) => {
+  const nextOpenIndex = completedDays.findIndex((isComplete) => !isComplete);
+  const dueTodayIndex = nextOpenIndex === -1 ? TOTAL_DAYS - 1 : nextOpenIndex;
+
+  return addDays(todayDate, -dueTodayIndex);
+};
+
+const normalizeTrackerState = ({
+  bestStreak = 0,
+  completedDays = emptyProgress(),
+  lockedDays = emptyProgress(),
+  schemaVersion = 2,
+  startDate,
+  updatedAt = 0,
+} = {}) => {
+  const normalizedCompletedDays = completedDays
+    .slice(0, TOTAL_DAYS)
+    .map(Boolean);
+
+  while (normalizedCompletedDays.length < TOTAL_DAYS) {
+    normalizedCompletedDays.push(false);
+  }
+
+  const normalizedLockedDays = lockedDays
+    .slice(0, TOTAL_DAYS)
+    .map((isLocked, index) => Boolean(isLocked) && normalizedCompletedDays[index]);
+
+  while (normalizedLockedDays.length < TOTAL_DAYS) {
+    normalizedLockedDays.push(false);
+  }
+
+  const { longestStreak } = calculateStreaks(normalizedCompletedDays);
+  const normalizedStartDate = isDateString(startDate)
+    ? startDate
+    : inferStartDateFromProgress(normalizedCompletedDays);
+
+  return {
+    completedDays: normalizedCompletedDays,
+    bestStreak: Math.max(longestStreak, clampStreak(bestStreak)),
+    lockedDays: normalizedLockedDays,
+    schemaVersion,
+    startDate: normalizedStartDate,
+    updatedAt: sanitizeTimestamp(updatedAt),
+  };
+};
 
 const clampStreak = (value) => {
   const streak = Number(value);
@@ -93,10 +226,14 @@ const getSharedTrackerState = () => {
   const sharedBestStreak = clampStreak(params.get('best'));
 
   return {
-    completedDays: progress,
-    bestStreak: Math.max(longestStreak, sharedBestStreak),
-    lockedDays: emptyProgress(),
-    updatedAt: 0,
+    ...normalizeTrackerState({
+      completedDays: progress,
+      bestStreak: Math.max(longestStreak, sharedBestStreak),
+      lockedDays: emptyProgress(),
+      startDate: inferStartDateFromProgress(progress),
+      updatedAt: 0,
+    }),
+    schemaVersion: 1,
   };
 };
 
@@ -121,17 +258,18 @@ const normalizeSavedTrackerState = (savedState) => {
     lockedDays.push(false);
   }
 
-  const { longestStreak } = calculateStreaks(completedDays);
   const savedBestStreak = Array.isArray(savedState)
     ? 0
     : clampStreak(savedState.bestStreak);
 
-  return {
+  return normalizeTrackerState({
     completedDays,
-    bestStreak: Math.max(longestStreak, savedBestStreak),
+    bestStreak: savedBestStreak,
     lockedDays,
+    schemaVersion: 2,
+    startDate: savedState?.startDate || inferStartDateFromProgress(completedDays),
     updatedAt: sanitizeTimestamp(savedState?.updatedAt),
-  };
+  });
 };
 
 const loadTrackerState = () => {
@@ -153,12 +291,13 @@ const loadTrackerState = () => {
     localStorage.removeItem(STORAGE_KEY);
   }
 
-  return {
+  return normalizeTrackerState({
     completedDays: emptyProgress(),
     bestStreak: 0,
     lockedDays: emptyProgress(),
+    startDate: getEasternDateString(),
     updatedAt: 0,
-  };
+  });
 };
 
 const progressToBits = (days) => days.map((isComplete) => (isComplete ? '1' : '0')).join('');
@@ -172,7 +311,9 @@ const bitsToProgress = (bits) => {
 };
 
 const encodeSyncState = (state) =>
-  `v1-c${progressToBits(state.completedDays)}-l${progressToBits(
+  `v2-s${compactDate(state.startDate)}-c${progressToBits(
+    state.completedDays,
+  )}-l${progressToBits(
     state.lockedDays,
   )}-b${clampStreak(state.bestStreak)}-u${sanitizeTimestamp(state.updatedAt)}`;
 
@@ -181,28 +322,156 @@ const decodeSyncState = (value) => {
     return null;
   }
 
-  const match = value.match(/^v1-c([01]{30})-l([01]{30})-b(\d{1,2})-u(\d{1,16})$/);
+  const v2Match = value.match(
+    /^v2-s(\d{8})-c([01]{30})-l([01]{30})-b(\d{1,2})-u(\d{1,16})$/,
+  );
 
-  if (!match) {
+  if (v2Match) {
+    const startDate = expandCompactDate(v2Match[1]);
+    const completedDays = bitsToProgress(v2Match[2]);
+    const lockedBits = bitsToProgress(v2Match[3]);
+
+    if (!startDate || !completedDays || !lockedBits) {
+      return null;
+    }
+
+    return normalizeTrackerState({
+      completedDays,
+      bestStreak: clampStreak(v2Match[4]),
+      lockedDays: lockedBits,
+      schemaVersion: 2,
+      startDate,
+      updatedAt: sanitizeTimestamp(v2Match[5]),
+    });
+  }
+
+  const v1Match = value.match(/^v1-c([01]{30})-l([01]{30})-b(\d{1,2})-u(\d{1,16})$/);
+
+  if (!v1Match) {
     return null;
   }
 
-  const completedDays = bitsToProgress(match[1]);
-  const lockedBits = bitsToProgress(match[2]);
+  const completedDays = bitsToProgress(v1Match[1]);
+  const lockedBits = bitsToProgress(v1Match[2]);
 
   if (!completedDays || !lockedBits) {
     return null;
   }
 
-  const lockedDays = lockedBits.map((isLocked, index) => isLocked && completedDays[index]);
-  const { longestStreak } = calculateStreaks(completedDays);
+  return normalizeTrackerState({
+    completedDays,
+    bestStreak: clampStreak(v1Match[3]),
+    lockedDays: lockedBits,
+    schemaVersion: 1,
+    startDate: inferStartDateFromProgress(completedDays),
+    updatedAt: sanitizeTimestamp(v1Match[4]),
+  });
+};
+
+const getChallengeStatus = (state, todayDate) => {
+  const elapsedDays = Math.max(0, daysBetween(state.startDate, todayDate));
+  const points = countPoints(state.completedDays);
+  const isComplete = points === TOTAL_DAYS;
+  const requiredThroughIndex = Math.min(elapsedDays, TOTAL_DAYS);
+  const missedDayIndex = state.completedDays.findIndex(
+    (isCompleteDay, index) => index < requiredThroughIndex && !isCompleteDay,
+  );
+  const isBroken = !isComplete && missedDayIndex !== -1;
+  const dueDayIndex =
+    !isBroken && !isComplete && elapsedDays >= 0 && elapsedDays < TOTAL_DAYS
+      ? elapsedDays
+      : null;
+  const todayLogged =
+    dueDayIndex !== null && Boolean(state.completedDays[dueDayIndex]);
+  const firstIncompleteIndex = state.completedDays.findIndex((isCompleteDay) => !isCompleteDay);
+  const currentStreak = isBroken
+    ? 0
+    : firstIncompleteIndex === -1
+      ? TOTAL_DAYS
+      : firstIncompleteIndex;
+
+  if (isComplete) {
+    return {
+      currentStreak,
+      dueDayIndex: null,
+      elapsedDays,
+      headline: '30/30. Perfect month.',
+      isBroken: false,
+      missedDayIndex: null,
+      subline: 'The 30-day streak is complete.',
+      todayLogged: false,
+    };
+  }
+
+  if (isBroken) {
+    return {
+      currentStreak,
+      dueDayIndex: null,
+      elapsedDays,
+      headline: 'Streak broken. Start a new run.',
+      isBroken: true,
+      missedDayIndex,
+      subline: `Day ${formatDayNumber(missedDayIndex + 1)} was missed.`,
+      todayLogged: false,
+    };
+  }
+
+  if (todayLogged) {
+    return {
+      currentStreak,
+      dueDayIndex,
+      elapsedDays,
+      headline: 'Today logged',
+      isBroken: false,
+      missedDayIndex: null,
+      subline: `Day ${formatDayNumber(dueDayIndex + 1)} is locked in for today.`,
+      todayLogged: true,
+    };
+  }
+
+  if (dueDayIndex !== null) {
+    return {
+      currentStreak,
+      dueDayIndex,
+      elapsedDays,
+      headline: `Day ${formatDayNumber(dueDayIndex + 1)} due today`,
+      isBroken: false,
+      missedDayIndex: null,
+      subline: 'Complete today’s non-negotiables, then check it off.',
+      todayLogged: false,
+    };
+  }
 
   return {
-    completedDays,
-    bestStreak: Math.max(longestStreak, clampStreak(match[3])),
-    lockedDays,
-    updatedAt: sanitizeTimestamp(match[4]),
+    currentStreak: 0,
+    dueDayIndex: null,
+    elapsedDays,
+    headline: 'Streak broken. Start a new run.',
+    isBroken: true,
+    missedDayIndex: TOTAL_DAYS - 1,
+    subline: 'The 30-day window has closed.',
+    todayLogged: false,
   };
+};
+
+const getDayCardStatus = ({ challengeStatus, index, isComplete, isLocked }) => {
+  if (isLocked) {
+    return { className: 'is-locked', label: 'Locked' };
+  }
+
+  if (isComplete) {
+    return { className: 'is-complete', label: 'Complete' };
+  }
+
+  if (index < Math.min(challengeStatus.elapsedDays, TOTAL_DAYS)) {
+    return { className: 'is-missed', label: 'Missed' };
+  }
+
+  if (!challengeStatus.isBroken && index === challengeStatus.dueDayIndex) {
+    return { className: 'is-due', label: 'Due today' };
+  }
+
+  return { className: 'is-waiting', label: 'Waiting' };
 };
 
 const fetchSharedTrackerState = async () => {
@@ -289,6 +558,49 @@ const downloadBlob = (blob, fileName) => {
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(imageUrl), 1000);
+};
+
+const downloadTextFile = (text, fileName, type) => {
+  downloadBlob(new Blob([text], { type }), fileName);
+};
+
+const escapeCalendarText = (value) =>
+  String(value)
+    .replaceAll('\\', '\\\\')
+    .replaceAll(';', '\\;')
+    .replaceAll(',', '\\,')
+    .replaceAll('\n', '\\n');
+
+const getCalendarTimestamp = () =>
+  new Date().toISOString().replaceAll('-', '').replaceAll(':', '').replace(/\.\d{3}Z$/, 'Z');
+
+const getCalendarDateTime = (dateString, hour, minute = 0) =>
+  `${compactDate(dateString)}T${String(hour).padStart(2, '0')}${String(minute).padStart(
+    2,
+    '0',
+  )}00`;
+
+const createReminderCalendar = ({ startDate, statusUrl }) => {
+  const description = `Bryan's daily Non Negotiables accountability check-in. ${statusUrl}`;
+
+  return [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Non Negotiables//Daily Guardrails//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    `UID:non-negotiables-${compactDate(startDate)}-${SYNC_KEY}@non-negotiables`,
+    `DTSTAMP:${getCalendarTimestamp()}`,
+    `DTSTART;TZID=${EASTERN_TIME_ZONE}:${getCalendarDateTime(startDate, 21)}`,
+    `DTEND;TZID=${EASTERN_TIME_ZONE}:${getCalendarDateTime(startDate, 21, 15)}`,
+    'RRULE:FREQ=DAILY;COUNT=30',
+    `SUMMARY:${escapeCalendarText('Non Negotiables check-in')}`,
+    `DESCRIPTION:${escapeCalendarText(description)}`,
+    `URL:${statusUrl}`,
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n');
 };
 
 const createAccountabilityTile = async ({ dayNumber, stats }) => {
@@ -441,6 +753,7 @@ function App() {
   const [tileShareState, setTileShareState] = useState('Share image');
   const [syncState, setSyncState] = useState('Syncing');
   const [syncReady, setSyncReady] = useState(false);
+  const [todayDate, setTodayDate] = useState(getEasternDateString);
   const trackerStateRef = useRef(trackerState);
   const lastSyncedValueRef = useRef(null);
   const isSavingRef = useRef(false);
@@ -450,19 +763,40 @@ function App() {
     trackerStateRef.current = trackerState;
   }, [trackerState]);
 
+  useEffect(() => {
+    const refreshTodayDate = () => {
+      setTodayDate((currentDate) => {
+        const nextDate = getEasternDateString();
+        return currentDate === nextDate ? currentDate : nextDate;
+      });
+    };
+    const dateTimer = window.setInterval(refreshTodayDate, 60 * 1000);
+
+    window.addEventListener('focus', refreshTodayDate);
+
+    return () => {
+      window.clearInterval(dateTimer);
+      window.removeEventListener('focus', refreshTodayDate);
+    };
+  }, []);
+
+  const challengeStatus = useMemo(
+    () => getChallengeStatus(trackerState, todayDate),
+    [todayDate, trackerState],
+  );
+
   const stats = useMemo(() => {
     const points = completedDays.filter(Boolean).length;
     const percentage = Math.round((points / TOTAL_DAYS) * 100);
-    const { currentStreak } = calculateStreaks(completedDays);
 
     return {
       points,
       percentage,
-      currentStreak,
+      currentStreak: challengeStatus.currentStreak,
       bestStreak,
       isComplete: points === TOTAL_DAYS,
     };
-  }, [bestStreak, completedDays]);
+  }, [bestStreak, challengeStatus.currentStreak, completedDays]);
 
   useEffect(() => {
     try {
@@ -474,13 +808,18 @@ function App() {
 
   const applyRemoteState = useCallback((remoteState) => {
     const encodedRemoteState = encodeSyncState(remoteState);
-    lastSyncedValueRef.current = encodedRemoteState;
-    setTrackerState(remoteState);
+    lastSyncedValueRef.current =
+      remoteState.schemaVersion === 2 ? encodedRemoteState : null;
+    setTrackerState({ ...remoteState, schemaVersion: 2 });
     setSyncState('Synced');
   }, []);
 
   const saveStateLive = useCallback(async (state, nextStatus = 'Synced') => {
-    const stateToSave = state.updatedAt ? state : markStateUpdated(state);
+    const stateToSave = normalizeTrackerState({
+      ...state,
+      schemaVersion: 2,
+      updatedAt: state.updatedAt || Date.now(),
+    });
 
     isSavingRef.current = true;
     setSyncState('Saving');
@@ -629,46 +968,57 @@ function App() {
   );
 
   const toggleDay = (index) => {
-    if (lockedDays[index]) {
+    if (
+      challengeStatus.isBroken ||
+      index !== challengeStatus.dueDayIndex ||
+      completedDays[index] ||
+      lockedDays[index]
+    ) {
       return;
     }
 
-    const isCompleting = !completedDays[index];
-
     setTrackerState((currentState) => {
+      const currentChallengeStatus = getChallengeStatus(currentState, todayDate);
+
+      if (
+        currentChallengeStatus.isBroken ||
+        index !== currentChallengeStatus.dueDayIndex ||
+        currentState.completedDays[index] ||
+        currentState.lockedDays[index]
+      ) {
+        return currentState;
+      }
+
       const nextCompletedDays = currentState.completedDays.map(
         (isComplete, currentIndex) =>
-          currentIndex === index ? !isComplete : isComplete,
-      );
-      const nextLockedDays = currentState.lockedDays.map((isLocked, currentIndex) =>
-        currentIndex === index && !nextCompletedDays[currentIndex] ? false : isLocked,
+          currentIndex === index ? true : isComplete,
       );
       const { longestStreak } = calculateStreaks(nextCompletedDays);
 
       return {
         completedDays: nextCompletedDays,
         bestStreak: Math.max(currentState.bestStreak, longestStreak),
-        lockedDays: nextLockedDays,
+        lockedDays: currentState.lockedDays,
+        schemaVersion: 2,
+        startDate: currentState.startDate,
         updatedAt: Date.now(),
       };
     });
 
-    setAnimatedDay(isCompleting ? index : null);
+    setAnimatedDay(index);
 
-    if (isCompleting) {
-      window.setTimeout(() => {
-        setAnimatedDay((currentDay) => (currentDay === index ? null : currentDay));
-      }, 700);
-    }
+    window.setTimeout(() => {
+      setAnimatedDay((currentDay) => (currentDay === index ? null : currentDay));
+    }, 700);
   };
 
   const resetProgress = () => {
-    if (stats.points === 0) {
+    if (stats.points === 0 && !challengeStatus.isBroken) {
       return;
     }
 
     const confirmed = window.confirm(
-      'Reset the daily check marks? Your best streak will stay saved.',
+      'Start a new 30-day run? Your best streak will stay saved.',
     );
 
     if (confirmed) {
@@ -676,6 +1026,8 @@ function App() {
         completedDays: emptyProgress(),
         bestStreak: currentState.bestStreak,
         lockedDays: emptyProgress(),
+        schemaVersion: 2,
+        startDate: todayDate,
         updatedAt: Date.now(),
       }));
       setAnimatedDay(null);
@@ -685,6 +1037,7 @@ function App() {
   const lockCompletedDay = (dayNumber) => {
     setTrackerState((currentState) => ({
       ...currentState,
+      schemaVersion: 2,
       lockedDays: currentState.lockedDays.map((isLocked, index) =>
         index === dayNumber - 1 && currentState.completedDays[index] ? true : isLocked,
       ),
@@ -701,6 +1054,19 @@ function App() {
     }
 
     window.setTimeout(() => setShareState('Copy status link'), 1800);
+  };
+
+  const addCalendarReminder = () => {
+    const reminderCalendar = createReminderCalendar({
+      startDate: todayDate,
+      statusUrl,
+    });
+
+    downloadTextFile(
+      reminderCalendar,
+      'non-negotiables-9pm-reminder.ics',
+      'text/calendar;charset=utf-8',
+    );
   };
 
   const shareAccountabilityTile = async () => {
@@ -807,6 +1173,31 @@ function App() {
           <span className="percent-pill">{stats.percentage}% complete</span>
         </div>
 
+        <div
+          className={`daily-checkin ${
+            challengeStatus.isBroken
+              ? 'is-broken'
+              : challengeStatus.todayLogged
+                ? 'is-logged'
+                : ''
+          }`}
+          aria-live="polite"
+        >
+          <div>
+            <p className="eyebrow">Today’s check-in</p>
+            <h3>{challengeStatus.headline}</h3>
+            <p>{challengeStatus.subline}</p>
+          </div>
+          <button
+            className="text-button reminder-button"
+            type="button"
+            onClick={addCalendarReminder}
+          >
+            <Bell size={17} aria-hidden="true" />
+            Add 9 PM reminder
+          </button>
+        </div>
+
         <div className="progress-track" aria-label={`${stats.percentage}% complete`}>
           <span style={{ width: `${stats.percentage}%` }} />
         </div>
@@ -900,7 +1291,7 @@ function App() {
           </div>
           <button className="reset-button" type="button" onClick={resetProgress}>
             <RotateCcw size={16} aria-hidden="true" />
-            Reset
+            {challengeStatus.isBroken ? 'Start new run' : 'Reset'}
           </button>
         </div>
 
@@ -909,11 +1300,24 @@ function App() {
             const dayNumber = index + 1;
             const isAnimating = animatedDay === index && isComplete;
             const isLocked = lockedDays[index];
+            const cardStatus = getDayCardStatus({
+              challengeStatus,
+              index,
+              isComplete,
+              isLocked,
+            });
+            const isInteractive =
+              !challengeStatus.isBroken &&
+              index === challengeStatus.dueDayIndex &&
+              !isComplete &&
+              !isLocked;
 
             return (
               <button
                 className={`day-card ${isComplete ? 'is-complete' : ''} ${
                   isLocked ? 'is-locked' : ''
+                } ${cardStatus.className} ${
+                  isInteractive ? 'is-interactive' : ''
                 } ${
                   isAnimating ? 'just-completed' : ''
                 }`}
@@ -921,10 +1325,8 @@ function App() {
                 key={dayNumber}
                 onClick={() => toggleDay(index)}
                 aria-pressed={isComplete}
-                aria-label={`Day ${dayNumber}, ${
-                  isLocked ? 'locked complete' : isComplete ? 'complete' : 'incomplete'
-                }`}
-                disabled={isLocked}
+                aria-label={`Day ${dayNumber}, ${cardStatus.label.toLowerCase()}`}
+                disabled={!isInteractive}
               >
                 <span className="day-label">Day</span>
                 <strong>{formatDayNumber(dayNumber)}</strong>
@@ -935,6 +1337,11 @@ function App() {
                   <span className="lock-badge" aria-hidden="true">
                     <LockKeyhole size={12} strokeWidth={2.8} />
                     Locked
+                  </span>
+                )}
+                {!isLocked && (
+                  <span className="state-badge" aria-hidden="true">
+                    {cardStatus.label}
                   </span>
                 )}
               </button>
