@@ -452,7 +452,8 @@ function App() {
     const tileText = `Bryan completed day: ${dayLabel}`;
 
     try {
-      setTileShareState('Creating image');
+      lockCompletedDay(latestCompletedDay);
+      setTileShareState('Locked - creating image');
 
       const tileBlob = await createAccountabilityTile({
         dayNumber: latestCompletedDay,
@@ -481,7 +482,6 @@ function App() {
             text: tileText,
           });
           setTileShareState('Shared');
-          lockCompletedDay(latestCompletedDay);
           window.setTimeout(() => setTileShareState('Share image'), 2200);
           return;
         } catch (error) {
@@ -495,7 +495,6 @@ function App() {
 
       downloadBlob(tileBlob, fileName);
       setTileShareState('Image downloaded');
-      lockCompletedDay(latestCompletedDay);
     } catch (error) {
       setTileShareState(error.name === 'AbortError' ? 'Share canceled' : 'Try again');
     }

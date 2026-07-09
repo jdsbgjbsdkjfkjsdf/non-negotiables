@@ -671,14 +671,17 @@ h2 {
 }
 
 .day-card.is-locked {
-  border-color: rgba(11, 18, 32, 0.2);
+  border-color: rgba(11, 18, 32, 0.34);
   background:
-    linear-gradient(180deg, rgba(247, 255, 253, 0.94), rgba(255, 255, 255, 0.96)),
+    linear-gradient(180deg, rgba(236, 250, 247, 0.98), rgba(255, 255, 255, 0.96)),
     var(--surface);
+  box-shadow:
+    0 0 0 2px rgba(11, 18, 32, 0.06),
+    0 16px 34px rgba(11, 18, 32, 0.11);
 }
 
 .day-card.is-locked::after {
-  border-color: rgba(11, 18, 32, 0.12);
+  border-color: rgba(11, 18, 32, 0.22);
 }
 
 .day-card.is-locked .check-ring {
@@ -694,14 +697,16 @@ h2 {
   align-items: center;
   gap: 4px;
   max-width: calc(100% - 20px);
-  border: 1px solid rgba(11, 18, 32, 0.12);
+  border: 1px solid rgba(11, 18, 32, 0.18);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.9);
-  color: var(--ink);
+  background: var(--ink);
+  color: #ffffff;
   padding: 4px 7px;
   font-size: 0.63rem;
   font-weight: 800;
   line-height: 1;
+  text-transform: uppercase;
+  box-shadow: 0 8px 18px rgba(11, 18, 32, 0.16);
 }
 
 .day-card.just-completed .check-ring {
