@@ -6,7 +6,38 @@ const STORAGE_KEY = 'non-negotiables-progress-v1';
 
 const emptyProgress = () => Array.from({ length: TOTAL_DAYS }, () => false);
 
-const getSharedProgress = () => {
+const clampStreak = (value) => {
+  const streak = Number(value);
+
+  if (!Number.isInteger(streak)) {
+    return 0;
+  }
+
+  return Math.min(Math.max(streak, 0), TOTAL_DAYS);
+};
+
+const calculateStreaks = (days) => {
+  let longestStreak = 0;
+  let runningStreak = 0;
+
+  days.forEach((isComplete) => {
+    runningStreak = isComplete ? runningStreak + 1 : 0;
+    longestStreak = Math.max(longestStreak, runningStreak);
+  });
+
+  const lastCompletedIndex = days.lastIndexOf(true);
+  let currentStreak = 0;
+
+  if (lastCompletedIndex >= 0) {
+    for (let index = lastCompletedIndex; index >= 0 && days[index]; index -= 1) {
+      currentStreak += 1;
+    }
+  }
+
+  return { currentStreak, longestStreak };
+};
+
+const getSharedTrackerState = () => {
   const params = new URLSearchParams(window.location.search);
   if (!params.has('days')) {
     return null;
@@ -23,48 +54,59 @@ const getSharedProgress = () => {
     progress[day - 1] = true;
   });
 
-  return progress;
+  const { longestStreak } = calculateStreaks(progress);
+  const sharedBestStreak = clampStreak(params.get('best'));
+
+  return {
+    completedDays: progress,
+    bestStreak: Math.max(longestStreak, sharedBestStreak),
+  };
 };
 
-const loadProgress = () => {
-  const sharedProgress = getSharedProgress();
+const normalizeSavedTrackerState = (savedState) => {
+  const savedDays = Array.isArray(savedState)
+    ? savedState
+    : savedState?.completedDays;
 
-  if (sharedProgress) {
-    return sharedProgress;
+  if (!Array.isArray(savedDays) || savedDays.length !== TOTAL_DAYS) {
+    return null;
+  }
+
+  const completedDays = savedDays.map(Boolean);
+  const { longestStreak } = calculateStreaks(completedDays);
+  const savedBestStreak = Array.isArray(savedState)
+    ? 0
+    : clampStreak(savedState.bestStreak);
+
+  return {
+    completedDays,
+    bestStreak: Math.max(longestStreak, savedBestStreak),
+  };
+};
+
+const loadTrackerState = () => {
+  const sharedTrackerState = getSharedTrackerState();
+
+  if (sharedTrackerState) {
+    return sharedTrackerState;
   }
 
   try {
-    const savedProgress = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    const savedState = normalizeSavedTrackerState(
+      JSON.parse(localStorage.getItem(STORAGE_KEY)),
+    );
 
-    if (Array.isArray(savedProgress) && savedProgress.length === TOTAL_DAYS) {
-      return savedProgress.map(Boolean);
+    if (savedState) {
+      return savedState;
     }
   } catch {
     localStorage.removeItem(STORAGE_KEY);
   }
 
-  return emptyProgress();
-};
-
-const calculateStreaks = (days) => {
-  let bestStreak = 0;
-  let runningStreak = 0;
-
-  days.forEach((isComplete) => {
-    runningStreak = isComplete ? runningStreak + 1 : 0;
-    bestStreak = Math.max(bestStreak, runningStreak);
-  });
-
-  const lastCompletedIndex = days.lastIndexOf(true);
-  let currentStreak = 0;
-
-  if (lastCompletedIndex >= 0) {
-    for (let index = lastCompletedIndex; index >= 0 && days[index]; index -= 1) {
-      currentStreak += 1;
-    }
-  }
-
-  return { currentStreak, bestStreak };
+  return {
+    completedDays: emptyProgress(),
+    bestStreak: 0,
+  };
 };
 
 const pluralizeDay = (count) => `${count} ${count === 1 ? 'day' : 'days'}`;
@@ -99,14 +141,15 @@ const copyTextToClipboard = async (text) => {
 };
 
 function App() {
-  const [completedDays, setCompletedDays] = useState(loadProgress);
+  const [trackerState, setTrackerState] = useState(loadTrackerState);
   const [animatedDay, setAnimatedDay] = useState(null);
   const [shareState, setShareState] = useState('Share status');
+  const { completedDays, bestStreak } = trackerState;
 
   const stats = useMemo(() => {
     const points = completedDays.filter(Boolean).length;
     const percentage = Math.round((points / TOTAL_DAYS) * 100);
-    const { currentStreak, bestStreak } = calculateStreaks(completedDays);
+    const { currentStreak } = calculateStreaks(completedDays);
 
     return {
       points,
@@ -115,11 +158,11 @@ function App() {
       bestStreak,
       isComplete: points === TOTAL_DAYS,
     };
-  }, [completedDays]);
+  }, [bestStreak, completedDays]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(completedDays));
-  }, [completedDays]);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(trackerState));
+  }, [trackerState]);
 
   const statusUrl = useMemo(() => {
     const url = new URL(window.location.href);
@@ -129,17 +172,25 @@ function App() {
       .join(',');
 
     url.searchParams.set('days', days);
+    url.searchParams.set('best', String(stats.bestStreak));
     return url.toString();
-  }, [completedDays]);
+  }, [completedDays, stats.bestStreak]);
 
   const toggleDay = (index) => {
     const isCompleting = !completedDays[index];
 
-    setCompletedDays((currentDays) =>
-      currentDays.map((isComplete, currentIndex) =>
-        currentIndex === index ? !isComplete : isComplete,
-      ),
-    );
+    setTrackerState((currentState) => {
+      const nextCompletedDays = currentState.completedDays.map(
+        (isComplete, currentIndex) =>
+          currentIndex === index ? !isComplete : isComplete,
+      );
+      const { longestStreak } = calculateStreaks(nextCompletedDays);
+
+      return {
+        completedDays: nextCompletedDays,
+        bestStreak: Math.max(currentState.bestStreak, longestStreak),
+      };
+    });
 
     setAnimatedDay(isCompleting ? index : null);
 
@@ -151,16 +202,19 @@ function App() {
   };
 
   const resetProgress = () => {
-    if (stats.points === 0) {
+    if (stats.points === 0 && stats.bestStreak === 0) {
       return;
     }
 
     const confirmed = window.confirm(
-      'Reset all 30 days? This clears the progress saved in this browser.',
+      'Reset all 30 days and the saved best streak? This clears the progress saved in this browser.',
     );
 
     if (confirmed) {
-      setCompletedDays(emptyProgress());
+      setTrackerState({
+        completedDays: emptyProgress(),
+        bestStreak: 0,
+      });
       setAnimatedDay(null);
     }
   };
